@@ -1,0 +1,60 @@
+from pathlib import Path
+
+from openevolve.config import Config, DatabaseConfig, EvaluatorConfig, LLMModelConfig, PromptConfig
+
+
+def load() -> Config:
+    """
+    Build an in-memory Config tuned for the Postgres/HypoPG smoke test.
+    Edit here (Python) instead of YAML per repo preference.
+    """
+    cfg = Config()
+
+    # LLM setup (model name can be swapped; requires OPENAI_API_KEY or compatible)
+    cfg.llm.models = [
+     LLMModelConfig(
+        name="gemini-2.5-flash",
+        api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
+      )
+    ]
+    cfg.llm.evaluator_models = cfg.llm.models.copy()
+
+    # Prompt customizations (templates live next to this config)
+    prompt_dir = Path(__file__).with_name("prompts")
+    cfg.prompt = PromptConfig(
+        template_dir=str(prompt_dir),
+        system_message="index_system",
+        include_artifacts=False,
+        use_template_stochasticity=False,
+        num_top_programs=2,
+        num_diverse_programs=1,
+    )
+
+    # Database / MAP-Elites knobs for quick smoke runs
+    cfg.database = DatabaseConfig(
+        in_memory=True,
+        population_size=30,
+        archive_size=20,
+        num_islands=3,
+        feature_dimensions=["storage_mb", "index_count"],
+        feature_bins={"storage_mb": 8, "index_count": 4},
+        migration_interval=25,
+        migration_rate=0.1,
+        log_prompts=True,
+    )
+
+    # Evaluator timeouts tuned for short HypoPG explain calls
+    cfg.evaluator = EvaluatorConfig(
+        timeout=180,
+        parallel_evaluations=1,
+        cascade_evaluation=False,
+        enable_artifacts=False,
+    )
+
+    cfg.max_iterations = 50
+    cfg.diff_based_evolution = True
+    cfg.log_dir = str(Path(__file__).parent / "output" / "logs")
+    cfg.file_suffix = ".py"
+
+    return cfg
+

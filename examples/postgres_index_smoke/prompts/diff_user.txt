@@ -1,0 +1,67 @@
+# Current Program Information
+- Metrics: {metrics}
+- Fitness: {fitness_score} | Feature coords: {feature_coords} over [{feature_dimensions}]
+- Improvement areas: {improvement_areas}
+
+# Workload + Schema (read-only)
+Workload:
+```sql
+SELECT
+    c.id AS customer_id,
+    c.segment,
+    c.region,
+    o.id AS order_id,
+    o.created_at,
+    o.status,
+    SUM((oi.quantity * oi.price_cents) - oi.discount_cents) AS gross_cents
+FROM orders o
+JOIN customers c ON c.id = o.customer_id
+JOIN order_items oi ON oi.order_id = o.id
+WHERE o.created_at >= NOW() - INTERVAL '30 days'
+  AND o.status IN ('shipped', 'processing')
+  AND c.segment IN ('enterprise', 'midmarket')
+GROUP BY c.id, c.segment, c.region, o.id, o.created_at, o.status
+HAVING SUM(oi.quantity) > 3
+ORDER BY o.created_at DESC, gross_cents DESC
+LIMIT 50;
+```
+
+Tables:
+- customers(id PK, name, segment, region, created_at, is_active)
+- orders(id PK, customer_id FK, status, created_at, total_cents, shipping_postcode, sales_rep_id)
+- order_items(id PK, order_id FK, product_id, quantity, price_cents, discount_cents)
+
+Constraints:
+- Keep ≤3 indexes; avoid redundant prefixes (e.g., (a,b) makes (a) redundant for this query).
+- Target join/filter prefixes: orders(customer_id), orders(status, created_at), customers(segment, region), order_items(order_id), order_items(order_id, product_id).
+- Cover ORDER BY on orders.created_at DESC when possible.
+
+# Current Program
+```{language}
+{current_program}
+```
+
+# Task
+Suggest better index candidates by editing ONLY `INDEX_CANDIDATES` using SEARCH/REPLACE diffs.
+Each entry must be: {{"ddl": "CREATE INDEX ...", "note": "<why>"}}.
+Do NOT change schema/data. No concurrent/index drops. Keep names meaningful.
+
+Diff format (must match exactly):
+<<<<<<< SEARCH
+# original code
+=======
+# new code
+>>>>>>> REPLACE
+
+Example of a valid change:
+<<<<<<< SEARCH
+INDEX_CANDIDATES = [
+]
+=======
+INDEX_CANDIDATES = [
+    {{"ddl": "CREATE INDEX idx_orders_status_created ON orders (status, created_at)", "note": "filter and order by created_at for status IN (...)" }},
+]
+>>>>>>> REPLACE
+
+{evolution_history}
+
