@@ -2,7 +2,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from this example directory regardless of cwd
+load_dotenv(dotenv_path=Path(__file__).with_name(".env"), override=False)
 
 from openevolve.api import run_evolution
 
