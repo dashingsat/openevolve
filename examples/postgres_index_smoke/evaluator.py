@@ -204,8 +204,9 @@ def evaluate(program_path: str) -> Dict[str, float]:
                 storage_bytes = _hypo_storage_bytes(cur) if ddls else 0
                 storage_mb = storage_bytes / (1024 * 1024)
 
-                # Preference: better than baseline, with softer penalty for size and count
-                penalty = 1.0 + (storage_mb * 0.01) + (index_count * 0.01)
+                # Preference: better than baseline, with softer penalty and a 10MB grace band
+                storage_overhead = max(storage_mb - 10.0, 0.0)
+                penalty = 1.0 + (storage_overhead * 0.001) + (index_count * 0.01)
                 combined_score = max(
                     0.0, baseline_cost / max(plan_cost * penalty, 1e-6)
                 )

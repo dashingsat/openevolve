@@ -45,6 +45,7 @@ Constraints:
 Suggest better index candidates by editing ONLY `INDEX_CANDIDATES` using SEARCH/REPLACE diffs.
 Each entry must be: {{"ddl": "CREATE INDEX ...", "note": "<why>"}}.
 Do NOT change schema/data. No concurrent/index drops. Keep names meaningful.
+Respond with ONLY the diff block; no extra text or commentary.
 
 Diff format (must match exactly):
 <<<<<<< SEARCH
