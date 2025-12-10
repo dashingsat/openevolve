@@ -1,5 +1,9 @@
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from openevolve.api import run_evolution
 
 from .config import load as load_config
