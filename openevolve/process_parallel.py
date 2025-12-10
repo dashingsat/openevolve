@@ -494,6 +494,16 @@ class ProcessParallelController:
 
                 if result.error:
                     logger.warning(f"Iteration {completed_iteration} error: {result.error}")
+                    if result.llm_response:
+                        snippet = result.llm_response[:400].replace("\n", "\\n")
+                        logger.warning(
+                            f"Iteration {completed_iteration} LLM response (first 400 chars): {snippet}"
+                        )
+                    if result.prompt and result.prompt.get("user"):
+                        prompt_snippet = result.prompt["user"][:400].replace("\n", "\\n")
+                        logger.warning(
+                            f"Iteration {completed_iteration} prompt user (first 400 chars): {prompt_snippet}"
+                        )
                 elif result.child_program_dict:
                     # Reconstruct program from dict
                     child_program = Program(**result.child_program_dict)
