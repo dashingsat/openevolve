@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from openevolve.config import Config, DatabaseConfig, EvaluatorConfig, LLMModelConfig, PromptConfig
@@ -10,13 +11,22 @@ def load() -> Config:
     """
     cfg = Config()
 
-    # LLM setup (model name can be swapped; requires OPENAI_API_KEY or compatible)
-    cfg.llm.models = [
-     LLMModelConfig(
-        name="gemini-2.5-flash",
-        api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
-      )
-    ]
+    # LLM setup with optional provider override (env LLM_PROVIDER=grok to use x.ai)
+    provider = os.environ.get("LLM_PROVIDER", "").lower()
+    if provider == "grok":
+        cfg.llm.models = [
+            LLMModelConfig(
+                name="grok-4-1-fast",
+                api_base="https://api.x.ai/v1",
+            )
+        ]
+    else:
+        cfg.llm.models = [
+            LLMModelConfig(
+                name="gemini-2.5-flash",
+                api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
+            )
+        ]
     cfg.llm.evaluator_models = cfg.llm.models.copy()
 
     # Prompt customizations (templates live next to this config)
@@ -51,7 +61,7 @@ def load() -> Config:
         enable_artifacts=False,
     )
 
-    cfg.max_iterations = 50
+    cfg.max_iterations = 7
     cfg.diff_based_evolution = True
     cfg.log_dir = str(Path(__file__).parent / "output" / "logs")
     cfg.file_suffix = ".py"
