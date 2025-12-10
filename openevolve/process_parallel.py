@@ -207,7 +207,10 @@ def _run_iteration_worker(
             diff_blocks = extract_diffs(llm_response)
             if not diff_blocks:
                 return SerializableResult(
-                    error=f"No valid diffs found in response", iteration=iteration
+                    error="No valid diffs found in response",
+                    iteration=iteration,
+                    llm_response=llm_response,
+                    prompt=prompt,
                 )
 
             child_code = apply_diff(parent.code, llm_response)
