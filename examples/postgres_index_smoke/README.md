@@ -19,6 +19,12 @@ This example evolves hypothetical indexes for a small 3-table workload using Hyp
 - Postgres with `hypopg` available (install via `brew install hypopg` if missing).
 - Env var `PG_CONN_STR` pointing at the target database.
 - LLM key (OpenAI-compatible) via `OPENAI_API_KEY`.
+- Optional: copy `env.example` to `.env` and load it:
+  ```bash
+  cd /Users/dashingsat/Documents/singularity/openevolve/examples/postgres_index_smoke
+  cp env.example .env
+  set -a; source .env; set +a  # exports all vars from .env
+  ```
 - Deps via `setup.sh` (uses `.venv` inside this folder) or run sub-steps:
   - `./install_env.sh`
   - `./install_requirements.sh`
