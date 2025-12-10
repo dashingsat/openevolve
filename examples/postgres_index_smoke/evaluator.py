@@ -93,7 +93,7 @@ def _ensure_schema_and_data(conn: psycopg.Connection) -> None:
                      ELSE 'apac' END,
                 NOW() - (g % 730) * INTERVAL '1 day',
                 TRUE
-            FROM generate_series(1, 800) AS g;
+            FROM generate_series(1, 6000) AS g;
             """
         )
 
@@ -101,7 +101,7 @@ def _ensure_schema_and_data(conn: psycopg.Connection) -> None:
             """
             INSERT INTO orders (customer_id, status, created_at, total_cents, shipping_postcode, sales_rep_id)
             SELECT
-                1 + (g % 800),
+                1 + (g % 6000),
                 CASE WHEN g % 4 = 0 THEN 'shipped'
                      WHEN g % 4 = 1 THEN 'processing'
                      WHEN g % 4 = 2 THEN 'pending'
@@ -110,7 +110,7 @@ def _ensure_schema_and_data(conn: psycopg.Connection) -> None:
                 10000 + (g % 5000),
                 LPAD((10000 + g)::text, 5, '0'),
                 100 + (g % 50)
-            FROM generate_series(1, 4000) AS g;
+            FROM generate_series(1, 300000) AS g;
             """
         )
 
@@ -118,12 +118,12 @@ def _ensure_schema_and_data(conn: psycopg.Connection) -> None:
             """
             INSERT INTO order_items (order_id, product_id, quantity, price_cents, discount_cents)
             SELECT
-                1 + (g % 4000),
-                10 + (g % 500),
+                1 + (g % 300000),
+                10 + (g % 5000),
                 1 + (g % 5),
-                500 + (g % 2000),
+                500 + (g % 20000),
                 CASE WHEN g % 7 = 0 THEN 50 ELSE 0 END
-            FROM generate_series(1, 12000) AS g;
+            FROM generate_series(1, 900000) AS g;
             """
         )
     conn.commit()
