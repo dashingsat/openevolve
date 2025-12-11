@@ -12,7 +12,7 @@ Requires:
 import importlib.util
 import os
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 import psycopg
 
@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 SCHEMA_SQL = (ROOT / "schema.sql").read_text()
 WORKLOAD_SQL = (ROOT / "workload.sql").read_text()
 PG_CONN_ENV = "PG_CONN_STR"
+STATS_SUMMARY: str = ""
 
 
 def _load_index_candidates(program_path: str) -> List[Dict[str, str]]:
@@ -76,6 +77,8 @@ def _ensure_schema_and_data(conn: psycopg.Connection) -> None:
         cur.execute("SELECT COUNT(*) FROM customers;")
         count = cur.fetchone()[0]
         if count and count > 0:
+            # Data already present; still collect stats for prompt context
+            _collect_stats(conn)
             return
 
         # Seed deterministic synthetic data for quick plans
@@ -127,6 +130,68 @@ def _ensure_schema_and_data(conn: psycopg.Connection) -> None:
             """
         )
     conn.commit()
+
+    # Collect stats once after ensuring data
+    _collect_stats(conn)
+
+
+def _format_common_vals(vals: List[str], freqs: List[float], max_items: int = 3) -> str:
+    pairs = []
+    for v, f in list(zip(vals, freqs))[:max_items]:
+        pairs.append(f"{v}({f:.2f})")
+    return ", ".join(pairs)
+
+
+def _collect_stats(conn: psycopg.Connection) -> None:
+    """Collect row counts and column selectivity stats for prompt context."""
+    global STATS_SUMMARY
+    summaries: List[str] = []
+    with conn.cursor() as cur:
+        # Row counts
+        cur.execute(
+            """
+            SELECT relname, reltuples::bigint
+            FROM pg_class
+            WHERE relname IN ('customers','orders','order_items')
+            """
+        )
+        rows = cur.fetchall()
+        row_counts = ", ".join(f"{r[0]}~{r[1]}" for r in rows)
+        summaries.append(f"row_counts: {row_counts}")
+
+        # Target columns for selectivity
+        target_cols: List[Tuple[str, str]] = [
+            ("orders", "status"),
+            ("orders", "customer_id"),
+            ("orders", "created_at"),
+            ("customers", "segment"),
+            ("customers", "region"),
+            ("order_items", "order_id"),
+        ]
+
+        for tbl, col in target_cols:
+            cur.execute(
+                """
+                SELECT n_distinct, null_frac,
+                       most_common_vals, most_common_freqs
+                FROM pg_stats
+                WHERE schemaname = 'public' AND tablename = %s AND attname = %s
+                """,
+                (tbl, col),
+            )
+            res = cur.fetchone()
+            if not res:
+                continue
+            n_distinct, null_frac, mc_vals, mc_freqs = res
+            common = ""
+            if mc_vals and mc_freqs:
+                common = _format_common_vals(list(mc_vals), list(mc_freqs))
+            summaries.append(
+                f"{tbl}.{col}: ndist={n_distinct:.1f}, null={null_frac:.2f}"
+                + (f", common={common}" if common else "")
+            )
+
+    STATS_SUMMARY = "; ".join(summaries)
 
 
 def _explain_cost(cur: psycopg.Cursor, query: str) -> float:
@@ -230,5 +295,6 @@ def evaluate(program_path: str) -> Dict[str, float]:
         "storage_mb": storage_mb,
         "index_count": index_count,
         "penalty": penalty,
+        "stats_summary": STATS_SUMMARY,
     }
 
