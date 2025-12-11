@@ -21,6 +21,7 @@ SCHEMA_SQL = (ROOT / "schema.sql").read_text()
 WORKLOAD_SQL = (ROOT / "workload.sql").read_text()
 PG_CONN_ENV = "PG_CONN_STR"
 STATS_SUMMARY: str = ""
+STATS_COLLECTED: bool = False
 
 
 def _load_index_candidates(program_path: str) -> List[Dict[str, str]]:
@@ -144,7 +145,10 @@ def _format_common_vals(vals: List[str], freqs: List[float], max_items: int = 3)
 
 def _collect_stats(conn: psycopg.Connection) -> None:
     """Collect row counts and column selectivity stats for prompt context."""
-    global STATS_SUMMARY
+    global STATS_SUMMARY, STATS_COLLECTED
+
+    if STATS_COLLECTED:
+        return
     summaries: List[str] = []
     with conn.cursor() as cur:
         # Row counts
@@ -192,6 +196,7 @@ def _collect_stats(conn: psycopg.Connection) -> None:
             )
 
     STATS_SUMMARY = "; ".join(summaries)
+    STATS_COLLECTED = True
 
 
 def _explain_cost(cur: psycopg.Cursor, query: str) -> float:
