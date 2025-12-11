@@ -39,8 +39,8 @@ def load() -> Config:
         system_message="index_system",
         include_artifacts=False,
         use_template_stochasticity=False,
-        num_top_programs=2,
-        num_diverse_programs=1,
+        num_top_programs=1,      # Reduced from 2 to save context
+        num_diverse_programs=0,  # Reduced from 1 to save context
     )
 
     # Database / MAP-Elites knobs for quick smoke runs
@@ -64,7 +64,7 @@ def load() -> Config:
         enable_artifacts=False,
     )
 
-    cfg.max_iterations = 20  # More iterations for bigger scale
+    cfg.max_iterations = 6  # More iterations for bigger scale
     cfg.diff_based_evolution = True
     cfg.log_dir = str(Path(__file__).parent / "output" / "logs")
     cfg.file_suffix = ".py"
