@@ -145,6 +145,7 @@ class PromptSampler:
             current_program=current_program,
             language=language,
             artifacts=artifacts_section,
+            stats_summary=program_metrics.get("stats_summary", "No stats available"),
             **kwargs,
         )
 

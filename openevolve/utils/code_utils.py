@@ -56,16 +56,65 @@ def apply_diff(original_code: str, diff_text: str) -> str:
     diff_blocks = extract_diffs(diff_text)
 
     # Apply each diff block
-    for search_text, replace_text in diff_blocks:
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    for i, (search_text, replace_text) in enumerate(diff_blocks):
         search_lines = search_text.split("\n")
         replace_lines = replace_text.split("\n")
-
-        # Find where the search pattern starts in the original code
+        
+        # Normalize whitespace for matching (ignoring leading/trailing whitespace on lines)
+        # But we still need to apply replacement accurately
+        
+        found = False
+        # Try exact match first
         for i in range(len(result_lines) - len(search_lines) + 1):
             if result_lines[i : i + len(search_lines)] == search_lines:
-                # Replace the matched section
                 result_lines[i : i + len(search_lines)] = replace_lines
+                found = True
                 break
+        
+        if found:
+            continue
+            
+        # Try looser match (ignoring trailing whitespace)
+        search_lines_stripped = [l.rstrip() for l in search_lines]
+        
+        # Also try ignoring leading/trailing blank lines in search block
+        # (LLMs often add extra newlines)
+        while search_lines_stripped and not search_lines_stripped[0]:
+            search_lines_stripped.pop(0)
+        while search_lines_stripped and not search_lines_stripped[-1]:
+            search_lines_stripped.pop()
+            
+        if not search_lines_stripped:
+            # Empty search block?
+            continue
+
+        for i in range(len(result_lines) - len(search_lines_stripped) + 1):
+            # We need to match against a slice of result_lines that also ignores blank lines?
+            # Or just match the non-blank content against the file?
+            # Matching strictly against the file lines is safer.
+            
+            # Check if this slice matches
+            slice_to_check = [l.rstrip() for l in result_lines[i : i + len(search_lines_stripped)]]
+            if slice_to_check == search_lines_stripped:
+                # Found it! Now we need to replace the CORRESPONDING lines in result_lines.
+                # But wait, we stripped blank lines from search_lines.
+                # We should replace the range [i : i + len(search_lines_stripped)].
+                # But if the original search block had blank lines we stripped, 
+                # we are replacing a smaller chunk than intended?
+                # Actually, usually the intent is to replace the "code part". 
+                # If the LLM added blank lines to search, it implies it thought they were there.
+                # If we ignore them, we match the code.
+                # Replacing just the code part is usually correct.
+                
+                result_lines[i : i + len(search_lines_stripped)] = replace_lines
+                found = True
+                break
+                
+        if not found:
+            logger.warning(f"Failed to apply diff block {i+1}. Search text:\n{search_text}\nCould not find match in original code.")
 
     return "\n".join(result_lines)
 
@@ -80,8 +129,52 @@ def extract_diffs(diff_text: str) -> List[Tuple[str, str]]:
     Returns:
         List of tuples (search_text, replace_text)
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Debug: Log raw diff text if extraction fails (or always for now to debug)
+    # logger.info(f"DEBUG: Extracting diffs from:\n{diff_text[:500]}...")
+
     diff_pattern = r"<<<<<<< SEARCH\n(.*?)=======\n(.*?)>>>>>>> REPLACE"
     diff_blocks = re.findall(diff_pattern, diff_text, re.DOTALL)
+    
+    if not diff_blocks:
+       # Less strict pattern for edge cases
+       diff_pattern = r"<<<<<<< SEARCH(.*?)\n?=======\n?(.*?)>>>>>>> REPLACE"
+       diff_blocks = re.findall(diff_pattern, diff_text, re.DOTALL)
+       
+    if not diff_blocks:
+        # Check for truncated response (missing closing tag)
+        # If we have SEARCH and ======= but no REPLACE tag, we might be able to salvage it
+        truncated_pattern = r"<<<<<<< SEARCH(.*?)\n?=======\n?(.*)$"
+        truncated_match = re.search(truncated_pattern, diff_text, re.DOTALL)
+        if truncated_match:
+            search_content = truncated_match.group(1).rstrip()
+            replace_content = truncated_match.group(2).rstrip()
+            
+            # Auto-heal heuristic:
+            # If replacement ends unexpectedly, try to close the list if it looks like a list.
+            if replace_content.strip().startswith("INDEX_CANDIDATES = ["):
+                # Check if it's missing the closing brace/bracket
+                if not replace_content.strip().endswith("]"):
+                    logger.warning("Auto-healing truncated list in diff response.")
+                    # Try to close the last dictionary if it looks open
+                    lines = replace_content.split("\n")
+                    last_line = lines[-1].strip()
+                    
+                    # If it cuts off inside a string, we can't easily fix it.
+                    # But if it cuts off after a comma or curly brace, we can append closing sequence.
+                    
+                    # Simplest fix: Just append ] to close the list
+                    # This assumes the truncation happened cleanly between items or after a property
+                    # A robust parser would be better, but this is a heuristic patch.
+                    replace_content += "\n]"
+            
+            logger.warning("Recovered truncated diff block.")
+            return [(search_content, replace_content)]
+            
+        logger.warning(f"Failed to extract diffs. Raw text:\n{diff_text}")
+       
     return [(match[0].rstrip(), match[1].rstrip()) for match in diff_blocks]
 
 

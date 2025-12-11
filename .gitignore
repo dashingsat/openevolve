@@ -54,3 +54,6 @@ htmlcov/
 secrets.yaml
 problems
 examples/postgres_index_smoke/.env
+examples/postgres_index_job/imdb_data
+
+

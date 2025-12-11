@@ -1,0 +1,4 @@
+# Environment for the Postgres/HypoPG smoke test
+psycopg[binary]>=3.2.0
+python-dotenv>=1.0.1
+
