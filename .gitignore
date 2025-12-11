@@ -53,3 +53,4 @@ htmlcov/
 # For SR
 secrets.yaml
 problems
+examples/postgres_index_smoke/.env
