@@ -39,8 +39,8 @@ def load() -> Config:
         system_message="index_system",
         include_artifacts=False,
         use_template_stochasticity=False,
-        num_top_programs=1,      # Reduced from 2 to save context
-        num_diverse_programs=0,  # Reduced from 1 to save context
+        num_top_programs=2,
+        num_diverse_programs=1,
     )
 
     # Database / MAP-Elites knobs for quick smoke runs

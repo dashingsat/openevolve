@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent
 JOB_DATA_DIR = ROOT / "job_data"
 PG_CONN_ENV = "PG_CONN_STR"
 STATS_SUMMARY: str = ""
+WORKLOAD_SUMMARY: str = ""
 STATS_COLLECTED: bool = False
 
 # Subset of queries to optimize
@@ -32,11 +33,17 @@ QUERY_NAMES = [
 
 def _read_queries() -> List[Tuple[str, str]]:
     """Read query SQLs from the job_data directory."""
+    global WORKLOAD_SUMMARY
     queries = []
+    summary_parts = []
     for name in QUERY_NAMES:
         p = JOB_DATA_DIR / name
         if p.exists():
-            queries.append((name, p.read_text()))
+            sql = p.read_text()
+            queries.append((name, sql))
+            summary_parts.append(f"--- Query {name} ---\n{sql}\n")
+            
+    WORKLOAD_SUMMARY = "\n".join(summary_parts)
     return queries
 
 QUERIES = _read_queries()
@@ -283,4 +290,5 @@ def evaluate(program_path: str) -> Dict[str, float]:
         "index_count": index_count,
         "penalty": penalty,
         "stats_summary": STATS_SUMMARY,
+        "workload": WORKLOAD_SUMMARY,
     }
