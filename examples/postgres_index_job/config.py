@@ -59,7 +59,7 @@ def load() -> Config:
     # Evaluator timeouts tuned for JOB workload
     cfg.evaluator = EvaluatorConfig(
         timeout=300,  # Increased for multiple complex queries
-        parallel_evaluations=1,
+        parallel_evaluations=4,
         cascade_evaluation=False,
         enable_artifacts=False,
     )

@@ -146,7 +146,6 @@ class PromptSampler:
             language=language,
             artifacts=artifacts_section,
             stats_summary=program_metrics.get("stats_summary", "No stats available"),
-            workload=program_metrics.get("workload", "No workload available"),
             **kwargs,
         )
 

@@ -175,12 +175,6 @@ CREATE TABLE title (
 
 ```
 
-## Workload (Selected JOB Queries)
-Goal: Minimize total cost for these queries.
-```sql
-{workload}
-```
-
 # Current Program Information
 - Metrics: {metrics}
 - Fitness: {fitness_score} | Feature coords: {feature_coords} over [{feature_dimensions}]

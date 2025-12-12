@@ -316,5 +316,4 @@ def evaluate(program_path: str) -> Dict[str, float]:
         "index_count": index_count,
         "penalty": penalty,
         "stats_summary": STATS_SUMMARY,
-        "workload": WORKLOAD_SUMMARY,
     }
