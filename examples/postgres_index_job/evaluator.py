@@ -31,6 +31,9 @@ QUERY_NAMES = [
     "5a.sql", "6a.sql", "10a.sql", "16a.sql"
 ]
 
+# Queries that grant a score bonus if significantly improved
+CRITICAL_QUERIES = {"6a.sql", "16a.sql"}
+
 def _read_queries() -> List[Tuple[str, str]]:
     """Read query SQLs from the job_data directory."""
     global WORKLOAD_SUMMARY
@@ -41,7 +44,13 @@ def _read_queries() -> List[Tuple[str, str]]:
         if p.exists():
             sql = p.read_text()
             queries.append((name, sql))
-            summary_parts.append(f"--- Query {name} ---\n{sql}\n")
+            
+            header = f"--- Query {name}"
+            if name in CRITICAL_QUERIES:
+                header += " (CRITICAL: 1.2x Score Bonus if improved >50%)"
+            header += " ---"
+            
+            summary_parts.append(f"{header}\n{sql}\n")
             
     WORKLOAD_SUMMARY = "\n".join(summary_parts)
     return queries
@@ -166,18 +175,24 @@ def _collect_stats(conn: psycopg.Connection) -> None:
     STATS_COLLECTED = True
 
 
-def _explain_total_cost(cur: psycopg.Cursor, queries: List[Tuple[str, str]]) -> float:
+def _explain_details(cur: psycopg.Cursor, queries: List[Tuple[str, str]]) -> Tuple[float, Dict[str, float]]:
+    """Return total cost and per-query costs."""
     total_cost = 0.0
+    details = {}
     for name, sql in queries:
         try:
             cur.execute("EXPLAIN (FORMAT JSON) " + sql)
             plan_json = cur.fetchone()[0][0]
-            total_cost += float(plan_json["Plan"]["Total Cost"])
+            c = float(plan_json["Plan"]["Total Cost"])
+            details[name] = c
+            total_cost += c
         except Exception as e:
             # If a query fails (e.g. timeout or syntax), penalize heavily but don't crash
             print(f"Query {name} failed: {e}")
-            total_cost += 1e9
-    return total_cost
+            penalty = 1e9
+            details[name] = penalty
+            total_cost += penalty
+    return total_cost, details
 
 
 def _apply_hypo_indexes(cur: psycopg.Cursor, ddls: Sequence[str]) -> List[int]:
@@ -243,7 +258,7 @@ def evaluate(program_path: str) -> Dict[str, float]:
                     }
 
                 # Baseline
-                baseline_cost = _explain_total_cost(cur, QUERIES)
+                baseline_cost, baseline_details = _explain_details(cur, QUERIES)
 
                 # Apply Indexes
                 try:
@@ -253,7 +268,7 @@ def evaluate(program_path: str) -> Dict[str, float]:
                     pass
 
                 # Plan with indexes
-                plan_cost = _explain_total_cost(cur, QUERIES)
+                plan_cost, plan_details = _explain_details(cur, QUERIES)
                 
                 storage_bytes = _hypo_storage_bytes(cur) if ddls else 0
                 storage_mb = storage_bytes / (1024 * 1024)
@@ -266,9 +281,20 @@ def evaluate(program_path: str) -> Dict[str, float]:
                 penalty = 1.0 + (storage_overhead * 0.0001) + (index_count * 0.005)
                 
                 # Score is improvement ratio
-                combined_score = max(
+                raw_score = max(
                     0.0, baseline_cost / max(plan_cost * penalty, 1e-6)
                 )
+
+                # Apply Critical Query Bonus
+                bonus_multiplier = 1.0
+                for q in CRITICAL_QUERIES:
+                    b_cost = baseline_details.get(q, 0)
+                    p_cost = plan_details.get(q, 0)
+                    # If improved by > 50%
+                    if b_cost > 0 and p_cost < (b_cost * 0.5):
+                        bonus_multiplier += 0.2 # 20% bonus per critical query solved
+                
+                combined_score = raw_score * bonus_multiplier
 
                 cur.execute("SELECT hypopg_reset();")
 

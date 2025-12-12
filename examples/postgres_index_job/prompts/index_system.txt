@@ -6,6 +6,7 @@ Your Goal: Evolve the `INDEX_CANDIDATES` list to maximize the query speedup (imp
 1.  **Speedup:** Minimize the Total Cost of the provided SQL workload. Lower cost = Higher Score.
 2.  **Storage Penalty:** You have a soft limit of **200MB** for total index size.
 3.  **Count Penalty:** You should aim for **high-impact indexes**. Creating too many indexes increases storage cost and incurs a penalty. Focus on quality over quantity.
+4.  **Critical Query Bonus:** Look for queries marked "CRITICAL" in the workload. Significantly improving these yields a massive score multiplier.
 
 **Your Optimization Playbook (JOB Specific Strategies):**
 1.  **Target Joins First:** The JOB workload is dominated by multi-table joins.
