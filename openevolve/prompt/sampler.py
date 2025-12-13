@@ -146,6 +146,9 @@ class PromptSampler:
             language=language,
             artifacts=artifacts_section,
             stats_summary=program_metrics.get("stats_summary", "No stats available"),
+            schema_summary=program_metrics.get("schema_summary", "No schema summary available"),
+            workload_digest=program_metrics.get("workload_digest", "No workload digest available"),
+            query_summary=program_metrics.get("query_summary", "No per-query summary available"),
             **kwargs,
         )
 

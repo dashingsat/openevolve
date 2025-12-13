@@ -135,22 +135,46 @@ def extract_diffs(diff_text: str) -> List[Tuple[str, str]]:
     # Debug: Log raw diff text if extraction fails (or always for now to debug)
     # logger.info(f"DEBUG: Extracting diffs from:\n{diff_text[:500]}...")
 
-    diff_pattern = r"<<<<<<< SEARCH\n(.*?)=======\n(.*?)>>>>>>> REPLACE"
-    diff_blocks = re.findall(diff_pattern, diff_text, re.DOTALL)
+    # Normalize line endings and strip common code fences that wrap diffs.
+    if diff_text is None:
+        return []
+
+    text = str(diff_text).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    # If response is a fenced code block, remove the outer fence.
+    # Common cases: ```diff ... ```, ``` ... ```, or leading/trailing backticks.
+    if text.startswith("```"):
+        # Remove first fence line
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1 :]
+        # Remove trailing fence if present
+        last_fence = text.rfind("```")
+        if last_fence != -1:
+            text = text[:last_fence]
+        text = text.strip()
+
+    # Allow marker whitespace and tolerate minor formatting drift.
+    diff_pattern = r"<<<<<<<\s*SEARCH\s*\n(.*?)\n?=======\s*\n(.*?)\n?>>>>>>>\s*REPLACE"
+    diff_blocks = re.findall(diff_pattern, text, re.DOTALL)
     
     if not diff_blocks:
        # Less strict pattern for edge cases
-       diff_pattern = r"<<<<<<< SEARCH(.*?)\n?=======\n?(.*?)>>>>>>> REPLACE"
-       diff_blocks = re.findall(diff_pattern, diff_text, re.DOTALL)
+       diff_pattern = r"<<<<<<<\s*SEARCH(.*?)\n?=======\n?(.*?)>>>>>>>\s*REPLACE"
+       diff_blocks = re.findall(diff_pattern, text, re.DOTALL)
        
     if not diff_blocks:
         # Check for truncated response (missing closing tag)
         # If we have SEARCH and ======= but no REPLACE tag, we might be able to salvage it
-        truncated_pattern = r"<<<<<<< SEARCH(.*?)\n?=======\n?(.*)$"
-        truncated_match = re.search(truncated_pattern, diff_text, re.DOTALL)
+        truncated_pattern = r"<<<<<<<\s*SEARCH(.*?)\n?=======\n?(.*)$"
+        truncated_match = re.search(truncated_pattern, text, re.DOTALL)
         if truncated_match:
             search_content = truncated_match.group(1).rstrip()
             replace_content = truncated_match.group(2).rstrip()
+
+            # Remove trailing fence remnants if any
+            if replace_content.endswith("```"):
+                replace_content = replace_content[: replace_content.rfind("```")].rstrip()
             
             # Auto-heal heuristic:
             # If replacement ends unexpectedly, try to close the list if it looks like a list.
@@ -165,7 +189,7 @@ def extract_diffs(diff_text: str) -> List[Tuple[str, str]]:
                     if last_brace_index != -1:
                         # Truncate everything after the last closed dictionary
                         # and close the list cleanly
-                        replace_content = replace_content[:last_brace_index+1] + "]"
+                        replace_content = replace_content[: last_brace_index + 1].rstrip() + "\n]"
                         logger.warning("Recovered truncated diff block by trimming partial items.")
                     else:
                         # No valid items found? Revert to empty list to avoid syntax error
@@ -174,7 +198,7 @@ def extract_diffs(diff_text: str) -> List[Tuple[str, str]]:
             
             return [(search_content, replace_content)]
             
-        logger.warning(f"Failed to extract diffs. Raw text:\n{diff_text}")
+        logger.warning("Failed to extract diffs.")
        
     return [(match[0].rstrip(), match[1].rstrip()) for match in diff_blocks]
 

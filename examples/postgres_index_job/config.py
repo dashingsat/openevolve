@@ -10,6 +10,7 @@ def load() -> Config:
     Edit here (Python) instead of YAML per repo preference.
     """
     cfg = Config()
+    cfg.language = "python"
 
     # LLM setup with optional provider override (env LLM_PROVIDER=grok to use x.ai)
     provider = os.environ.get("LLM_PROVIDER", "").lower()
