@@ -158,19 +158,20 @@ def extract_diffs(diff_text: str) -> List[Tuple[str, str]]:
                 # Check if it's missing the closing brace/bracket
                 if not replace_content.strip().endswith("]"):
                     logger.warning("Auto-healing truncated list in diff response.")
-                    # Try to close the last dictionary if it looks open
-                    lines = replace_content.split("\n")
-                    last_line = lines[-1].strip()
                     
-                    # If it cuts off inside a string, we can't easily fix it.
-                    # But if it cuts off after a comma or curly brace, we can append closing sequence.
+                    # Smart salvage: Find the last successfully closed item
+                    last_brace_index = replace_content.rfind("}")
                     
-                    # Simplest fix: Just append ] to close the list
-                    # This assumes the truncation happened cleanly between items or after a property
-                    # A robust parser would be better, but this is a heuristic patch.
-                    replace_content += "\n]"
+                    if last_brace_index != -1:
+                        # Truncate everything after the last closed dictionary
+                        # and close the list cleanly
+                        replace_content = replace_content[:last_brace_index+1] + "]"
+                        logger.warning("Recovered truncated diff block by trimming partial items.")
+                    else:
+                        # No valid items found? Revert to empty list to avoid syntax error
+                        replace_content = "INDEX_CANDIDATES = []"
+                        logger.warning("Recovered truncated diff block by resetting to empty list.")
             
-            logger.warning("Recovered truncated diff block.")
             return [(search_content, replace_content)]
             
         logger.warning(f"Failed to extract diffs. Raw text:\n{diff_text}")
