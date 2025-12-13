@@ -11,6 +11,7 @@ Requires:
 """
 
 import importlib.util
+import hashlib
 import math
 import os
 import re
@@ -505,6 +506,109 @@ def _compile_candidates_to_ddls(
         notes.append(str(entry.get("n", entry.get("note", ""))).strip())
 
     return ddls, notes, dropped
+
+
+def _safe_ident(s: str) -> str:
+    """Best-effort identifier sanitizer for generated index names."""
+    s = re.sub(r"[^a-zA-Z0-9_]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "x"
+
+
+def _make_index_name(table: str, method: str, cols: Sequence[str]) -> str:
+    """
+    Deterministically generate a unique-ish index name.
+    Postgres identifier limit is 63 bytes, so we truncate and add a hash suffix.
+    """
+    base = f"idx_{_safe_ident(table)}_{_safe_ident('_'.join(cols))}_{_safe_ident(method)}"
+    h = hashlib.sha1(f"{table}|{method}|{','.join(cols)}".encode("utf-8")).hexdigest()[:8]
+    # leave room for "_" + hash
+    prefix = base[: max(1, 63 - 1 - len(h))]
+    return f"{prefix}_{h}".lower()
+
+
+def render_index_sql(
+    candidates: List[Dict[str, Any]],
+    conn: psycopg.Connection,
+    *,
+    schema: str = "public",
+    if_not_exists: bool = True,
+) -> str:
+    """
+    Expand compact index specs into concrete CREATE INDEX statements (for manual use).
+
+    This is intended for exporting the final "best" solution into a readable SQL file.
+    It validates against the live DB schema to avoid producing invalid SQL.
+    """
+    schema_cols = _get_schema_cols(conn)
+
+    # Keep bounded and apply the same dedupe/pruning logic as evaluation.
+    trimmed = candidates[:MAX_INDEX_CANDIDATES]
+    deduped: List[Dict[str, Any]] = []
+    seen_keys: Set[Tuple[str, str, Tuple[str, ...]]] = set()
+    for e in trimmed:
+        key = _candidate_to_key(e)
+        if key and key in seen_keys:
+            continue
+        if key:
+            seen_keys.add(key)
+        deduped.append(e)
+    deduped = _prune_prefix_redundancy(deduped)
+
+    lines: List[str] = []
+    dropped = 0
+
+    schema_sql = _safe_ident(schema)
+    ine = " IF NOT EXISTS" if if_not_exists else ""
+
+    for entry in deduped:
+        # Phase 1: no raw DDL escape hatch in prompt, but handle gracefully if present.
+        if "ddl" in entry and isinstance(entry.get("ddl"), str):
+            note = str(entry.get("note", "")).strip()
+            if note:
+                lines.append(f"-- {note}")
+            lines.append(str(entry["ddl"]).rstrip(";") + ";")
+            continue
+
+        t = entry.get("t")
+        k = entry.get("k")
+        if not isinstance(t, str) or not t.strip():
+            dropped += 1
+            continue
+        if not isinstance(k, list) or not k:
+            dropped += 1
+            continue
+
+        table = t.strip()
+        cols = [str(c).strip() for c in k if str(c).strip()]
+        if not cols or len(cols) > MAX_INDEX_COLS:
+            dropped += 1
+            continue
+
+        method = str(entry.get("m", "btree")).strip().lower() or "btree"
+        if method not in ALLOWED_INDEX_METHODS:
+            dropped += 1
+            continue
+
+        valid_cols = schema_cols.get(table, set())
+        if not valid_cols or any(c not in valid_cols for c in cols):
+            dropped += 1
+            continue
+
+        name = _make_index_name(table, method, cols)
+        note = str(entry.get("n", entry.get("note", ""))).strip()
+        if note:
+            lines.append(f"-- {note}")
+
+        col_sql = ", ".join(cols)
+        lines.append(
+            f"CREATE INDEX{ine} {name} ON {schema_sql}.{table} USING {method} ({col_sql});"
+        )
+
+    if dropped:
+        lines.insert(0, f"-- NOTE: {dropped} candidate(s) were dropped during export due to validation/pruning.")
+
+    return "\n".join(lines).strip() + ("\n" if lines else "")
 
 
 def _explain_details(cur: psycopg.Cursor, queries: List[Tuple[str, str]]) -> Tuple[float, Dict[str, float]]:
