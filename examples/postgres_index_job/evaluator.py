@@ -37,7 +37,7 @@ BASELINE_DETAILS_CACHE: Dict[str, float] = {}
 
 ALLOWED_INDEX_METHODS: Set[str] = {"btree", "hash", "gin", "gist", "brin", "spgist"}
 MAX_INDEX_COLS: int = 3
-MAX_INDEX_CANDIDATES: int = 16
+MAX_INDEX_CANDIDATES: int = 20
 
 # Subset of queries to optimize
 QUERY_NAMES = [

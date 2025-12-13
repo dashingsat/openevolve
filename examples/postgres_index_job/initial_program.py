@@ -11,7 +11,7 @@ Seed program for evolving Postgres index candidates with OpenEvolve + HypoPG on 
 # - n: short note (string)
 #
 # Example:
-# INDEX_CANDIDATES = [
+# INDEX_CANDIDATES = [  # up to 20 entries recommended
 #     {"t": "title", "k": ["production_year", "id"], "n": "range + join (composite)", "m": "btree"},
 # ]
 INDEX_CANDIDATES = []

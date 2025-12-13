@@ -31,7 +31,7 @@ Each entry must be a dict with:
 - `n`: short note explaining intent
 
 Constraints:
-- Max 16 candidates total.
+- Max 20 candidates total.
 - Do NOT change anything outside `INDEX_CANDIDATES`.
 - Do NOT add code fences. Do NOT add commentary. Output ONLY the diff block.
 
