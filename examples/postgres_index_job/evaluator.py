@@ -23,6 +23,7 @@ import psycopg
 ROOT = Path(__file__).resolve().parent
 JOB_DATA_DIR = ROOT / "job_data"
 PG_CONN_ENV = "PG_CONN_STR"
+PG_SCHEMA_ENV = "PG_SCHEMA"  # optional, defaults to "public"
 STATS_SUMMARY: str = ""
 SCHEMA_SUMMARY: str = ""
 WORKLOAD_DIGEST: str = ""
@@ -39,10 +40,23 @@ ALLOWED_INDEX_METHODS: Set[str] = {"btree", "hash", "gin", "gist", "brin", "spgi
 MAX_INDEX_COLS: int = 3
 MAX_INDEX_CANDIDATES: int = 20
 
+
+def _target_schema() -> str:
+    """Target schema for workload tables and catalog lookups (defaults to public)."""
+    s = os.environ.get(PG_SCHEMA_ENV, "public").strip()
+    return s or "public"
+
 # Subset of queries to optimize
 QUERY_NAMES = [
     "1a.sql", "2a.sql", "3a.sql", "4a.sql", 
-    "5a.sql", "6a.sql", "10a.sql", "16a.sql"
+    "5a.sql", "6a.sql", "10a.sql", "16a.sql",
+    "9a.sql","9b.sql","9c.sql","9d.sql"
+    "11a.sql", "11b.sql", "11c.sql", "11d.sql",
+    "21a.sql", "21b.sql", "21c.sql",
+    "30a.sql", "30b.sql", "30c.sql",
+    "31a.sql", "31b.sql", "31c.sql",
+    "17a.sql", "17b.sql", "17c.sql","17d.sql","17e.sql","17f.sql",
+    "25a.sql", "25b.sql", "25c.sql"
 ]
 
 # Queries that grant a score bonus if significantly improved
@@ -199,7 +213,13 @@ def _get_conn() -> psycopg.Connection:
     conn_str = os.environ.get(PG_CONN_ENV)
     if not conn_str:
         raise RuntimeError(f"Set {PG_CONN_ENV} to a valid Postgres connection string.")
-    return psycopg.connect(conn_str, autocommit=False)
+    conn = psycopg.connect(conn_str, autocommit=False)
+    # Ensure unqualified table names in JOB queries and generated DDL resolve correctly.
+    # Keep pg_catalog in search_path for built-ins.
+    schema = _target_schema()
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('search_path', %s, false);", (f"{schema},pg_catalog",))
+    return conn
 
 
 def _ensure_hypopg(cur: psycopg.Cursor) -> None:
@@ -276,9 +296,9 @@ def _collect_stats(conn: psycopg.Connection) -> None:
                 SELECT n_distinct, null_frac,
                        most_common_vals, most_common_freqs
                 FROM pg_stats
-                WHERE schemaname = 'public' AND tablename = %s AND attname = %s
+                WHERE schemaname = %s AND tablename = %s AND attname = %s
                 """,
-                (tbl, col),
+                (_target_schema(), tbl, col),
             )
              res = cur.fetchone()
              if res:
@@ -292,9 +312,9 @@ def _collect_stats(conn: psycopg.Connection) -> None:
     STATS_COLLECTED = True
 
 
-def _load_public_schema_columns(conn: psycopg.Connection) -> Dict[str, Set[str]]:
+def _load_schema_columns(conn: psycopg.Connection, schema: str) -> Dict[str, Set[str]]:
     """
-    Return {table_name -> set(column_names)} for public schema.
+    Return {table_name -> set(column_names)} for the given schema.
     """
     out: Dict[str, Set[str]] = {}
     with conn.cursor() as cur:
@@ -302,9 +322,10 @@ def _load_public_schema_columns(conn: psycopg.Connection) -> Dict[str, Set[str]]
             """
             SELECT table_name, column_name
             FROM information_schema.columns
-            WHERE table_schema = 'public'
+            WHERE table_schema = %s
             ORDER BY table_name, ordinal_position
-            """
+            """,
+            (schema,),
         )
         for tbl, col in cur.fetchall():
             out.setdefault(str(tbl), set()).add(str(col))
@@ -337,7 +358,7 @@ def _get_schema_cols(conn: psycopg.Connection) -> Dict[str, Set[str]]:
     """Get cached schema columns map, loading it once per process."""
     global SCHEMA_COLS_CACHE
     if SCHEMA_COLS_CACHE is None:
-        SCHEMA_COLS_CACHE = _load_public_schema_columns(conn)
+        SCHEMA_COLS_CACHE = _load_schema_columns(conn, _target_schema())
     return SCHEMA_COLS_CACHE
 
 
@@ -531,7 +552,7 @@ def render_index_sql(
     candidates: List[Dict[str, Any]],
     conn: psycopg.Connection,
     *,
-    schema: str = "public",
+    schema: Optional[str] = None,
     if_not_exists: bool = True,
 ) -> str:
     """
@@ -558,7 +579,7 @@ def render_index_sql(
     lines: List[str] = []
     dropped = 0
 
-    schema_sql = _safe_ident(schema)
+    schema_sql = _safe_ident(schema or _target_schema())
     ine = " IF NOT EXISTS" if if_not_exists else ""
 
     for entry in deduped:

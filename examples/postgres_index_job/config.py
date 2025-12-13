@@ -65,7 +65,7 @@ def load() -> Config:
         enable_artifacts=False,
     )
 
-    cfg.max_iterations = 6  # More iterations for bigger scale
+    cfg.max_iterations = 50 # More iterations for bigger scale
     cfg.diff_based_evolution = True
     cfg.log_dir = str(Path(__file__).parent / "output" / "logs")
     cfg.file_suffix = ".py"

@@ -47,7 +47,8 @@ def main() -> None:
 
         candidates = _load_index_candidates(str(best_program_path))
         with _get_conn() as conn:
-            sql = render_index_sql(candidates, conn, schema="public", if_not_exists=True)
+            # Schema defaults to PG_SCHEMA env var (or "public") inside evaluator helpers.
+            sql = render_index_sql(candidates, conn, schema=None, if_not_exists=True)
 
         best_sql_path.write_text(
             f"-- Generated from {best_program_path.name}\n"
