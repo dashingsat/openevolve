@@ -29,16 +29,19 @@ SCHEMA_SUMMARY: str = ""
 WORKLOAD_DIGEST: str = ""
 STATS_COLLECTED: bool = False
 SCHEMA_COLLECTED: bool = False
+ROW_COUNT_BY_TABLE: Dict[str, float] = {}
 
 # Phase 2: evaluator-local caches (per process)
 SCHEMA_COLS_CACHE: Optional[Dict[str, Set[str]]] = None
 BASELINE_CACHED: bool = False
 BASELINE_COST_CACHE: float = float("inf")
 BASELINE_DETAILS_CACHE: Dict[str, float] = {}
+BASELINE_PLAN_SHAPE_CACHE: Dict[str, float] = {}
 
 ALLOWED_INDEX_METHODS: Set[str] = {"btree", "hash", "gin", "gist", "brin", "spgist"}
 MAX_INDEX_COLS: int = 3
 MAX_INDEX_CANDIDATES: int = 20
+LARGE_TABLE_ROW_THRESHOLD: float = 1_000_000.0  # big-table threshold for plan-shape tie-breaker
 
 
 def _target_schema() -> str:
@@ -48,15 +51,13 @@ def _target_schema() -> str:
 
 # Subset of queries to optimize
 QUERY_NAMES = [
-    "1a.sql", "2a.sql", "3a.sql", "4a.sql", 
-    "5a.sql", "6a.sql", "10a.sql", "16a.sql",
-    "9a.sql","9b.sql","9c.sql","9d.sql"
-    "11a.sql", "11b.sql", "11c.sql", "11d.sql",
-    "21a.sql", "21b.sql", "21c.sql",
-    "30a.sql", "30b.sql", "30c.sql",
-    "31a.sql", "31b.sql", "31c.sql",
-    "17a.sql", "17b.sql", "17c.sql","17d.sql","17e.sql","17f.sql",
-    "25a.sql", "25b.sql", "25c.sql"
+   "1a.sql", "2a.sql", "3a.sql", "4a.sql", 
+    "5a.sql", "6a.sql", "7a.sql", "8a.sql",
+    "15a.sql", "16a.sql", "17a.sql", "18a.sql",
+    "19a.sql", "20a.sql","21a.sql","21b.sql","22b.sql", "23b.sql",
+    "21c.sql", "22c.sql","23c.sql","25a.sql", "25b.sql","25c.sql",
+    "26a.sql","27a.sql", "28a.sql","30c.sql", "31c.sql","32c.sql",
+    "31a.sql", "31b.sql","32a.sql","32b.sql"
 ]
 
 # Queries that grant a score bonus if significantly improved
@@ -103,40 +104,63 @@ def _extract_workload_facts(sql: str) -> Dict[str, Any]:
 
     # Join edges
     join_edges = []
+    join_cols_by_table: Dict[str, List[str]] = {}
     for a1, c1, a2, c2 in _RE_JOIN_EDGE.findall(sql):
         t1 = alias_to_table.get(a1, a1)
         t2 = alias_to_table.get(a2, a2)
         join_edges.append(f"{t1}.{c1} = {t2}.{c2}")
+        join_cols_by_table.setdefault(t1, []).append(c1)
+        join_cols_by_table.setdefault(t2, []).append(c2)
     join_edges = _dedupe_preserve_order(join_edges)
+    for t in list(join_cols_by_table.keys()):
+        join_cols_by_table[t] = _dedupe_preserve_order(join_cols_by_table[t])
 
     # WHERE predicates (best-effort)
     where_cols = []
     where_ops = []
+    where_cols_by_table: Dict[str, List[Tuple[str, str]]] = {}  # table -> (col, op)
     m_where = _RE_WHERE.search(sql)
     where_part = m_where.group(1) if m_where else ""
     for a, c, op in _RE_PREDICATE_COL.findall(where_part):
         t = alias_to_table.get(a, a)
         where_cols.append(f"{t}.{c}")
         where_ops.append(f"{t}.{c} {op.upper()}")
+        where_cols_by_table.setdefault(t, []).append((c, op.upper()))
     where_cols = _dedupe_preserve_order(where_cols)
     where_ops = _dedupe_preserve_order(where_ops)
+    for t in list(where_cols_by_table.keys()):
+        seen: Set[Tuple[str, str]] = set()
+        deduped_pairs: List[Tuple[str, str]] = []
+        for pair in where_cols_by_table[t]:
+            if pair not in seen:
+                seen.add(pair)
+                deduped_pairs.append(pair)
+        where_cols_by_table[t] = deduped_pairs
 
     # GROUP BY / ORDER BY cols
     group_cols = []
+    group_cols_by_table: Dict[str, List[str]] = {}
     m_group = _RE_GROUP_BY.search(sql)
     group_part = m_group.group(1) if m_group else ""
     for a, c in _RE_COLREF.findall(group_part):
         t = alias_to_table.get(a, a)
         group_cols.append(f"{t}.{c}")
+        group_cols_by_table.setdefault(t, []).append(c)
     group_cols = _dedupe_preserve_order(group_cols)
+    for t in list(group_cols_by_table.keys()):
+        group_cols_by_table[t] = _dedupe_preserve_order(group_cols_by_table[t])
 
     order_cols = []
+    order_cols_by_table: Dict[str, List[str]] = {}
     m_order = _RE_ORDER_BY.search(sql)
     order_part = m_order.group(1) if m_order else ""
     for a, c in _RE_COLREF.findall(order_part):
         t = alias_to_table.get(a, a)
         order_cols.append(f"{t}.{c}")
+        order_cols_by_table.setdefault(t, []).append(c)
     order_cols = _dedupe_preserve_order(order_cols)
+    for t in list(order_cols_by_table.keys()):
+        order_cols_by_table[t] = _dedupe_preserve_order(order_cols_by_table[t])
 
     return {
         "tables": tables,
@@ -145,6 +169,10 @@ def _extract_workload_facts(sql: str) -> Dict[str, Any]:
         "where_ops": where_ops,
         "group_cols": group_cols,
         "order_cols": order_cols,
+        "join_cols_by_table": join_cols_by_table,
+        "where_cols_by_table": where_cols_by_table,
+        "group_cols_by_table": group_cols_by_table,
+        "order_cols_by_table": order_cols_by_table,
         "alias_to_table": alias_to_table,
     }
 
@@ -152,6 +180,16 @@ def _extract_workload_facts(sql: str) -> Dict[str, Any]:
 def _build_workload_digest(queries: List[Tuple[str, str]]) -> Tuple[str, Set[str]]:
     lines: List[str] = []
     used_tables: Set[str] = set()
+
+    def _where_selectivity_rank(op: str) -> int:
+        opu = op.upper()
+        if opu in {"=", "IN"}:
+            return 0
+        if opu in {"LIKE", "ILIKE"}:
+            return 1
+        if opu == "BETWEEN":
+            return 2
+        return 3
 
     for name, sql in queries:
         facts = _extract_workload_facts(sql)
@@ -172,6 +210,43 @@ def _build_workload_digest(queries: List[Tuple[str, str]]) -> Tuple[str, Set[str
             lines.append(f"  group_by: {', '.join(facts['group_cols'][:8])}" + (" ..." if len(facts["group_cols"]) > 8 else ""))
         if facts["order_cols"]:
             lines.append(f"  order_by: {', '.join(facts['order_cols'][:8])}" + (" ..." if len(facts["order_cols"]) > 8 else ""))
+
+        # Composite opportunities: selectivity-first (join+where), plus light join+group/order.
+        join_cols_by_table: Dict[str, List[str]] = facts.get("join_cols_by_table", {})
+        where_cols_by_table: Dict[str, List[Tuple[str, str]]] = facts.get("where_cols_by_table", {})
+        group_cols_by_table: Dict[str, List[str]] = facts.get("group_cols_by_table", {})
+        order_cols_by_table: Dict[str, List[str]] = facts.get("order_cols_by_table", {})
+
+        composite_suggestions: List[str] = []
+
+        # 1) JOIN + WHERE (preferred)
+        for tbl in sorted(set(join_cols_by_table.keys()) & set(where_cols_by_table.keys())):
+            join_cols = join_cols_by_table.get(tbl, [])
+            where_pairs = where_cols_by_table.get(tbl, [])
+            where_pairs_sorted = sorted(where_pairs, key=lambda p: _where_selectivity_rank(p[1]))
+            for (wcol, _wop) in where_pairs_sorted[:2]:
+                for jcol in join_cols[:2]:
+                    if wcol != jcol:
+                        composite_suggestions.append(f"{tbl}({wcol}, {jcol})")
+
+        # 2) JOIN + GROUP/ORDER (secondary)
+        for tbl, join_cols in join_cols_by_table.items():
+            if not join_cols:
+                continue
+            j0 = join_cols[0]
+            for gcol in group_cols_by_table.get(tbl, [])[:1]:
+                if gcol != j0:
+                    composite_suggestions.append(f"{tbl}({j0}, {gcol})")
+            for ocol in order_cols_by_table.get(tbl, [])[:1]:
+                if ocol != j0:
+                    composite_suggestions.append(f"{tbl}({j0}, {ocol})")
+
+        composite_suggestions = _dedupe_preserve_order(composite_suggestions)
+        if composite_suggestions:
+            lines.append(
+                f"  composite_opportunities: {', '.join(composite_suggestions[:8])}"
+                + (" ..." if len(composite_suggestions) > 8 else "")
+            )
 
     return "\n".join(lines).strip(), used_tables
 
@@ -251,7 +326,7 @@ def _format_common_vals(vals: List[str], freqs: List[float], max_items: int = 3)
 
 def _collect_stats(conn: psycopg.Connection) -> None:
     """Collect row counts and stats for prompt context."""
-    global STATS_SUMMARY, STATS_COLLECTED
+    global STATS_SUMMARY, STATS_COLLECTED, ROW_COUNT_BY_TABLE
 
     if STATS_COLLECTED:
         return
@@ -278,6 +353,12 @@ def _collect_stats(conn: psycopg.Connection) -> None:
             tables
         )
         rows = cur.fetchall()
+        ROW_COUNT_BY_TABLE = {}
+        for relname, reltuples in rows:
+            try:
+                ROW_COUNT_BY_TABLE[str(relname)] = float(reltuples)
+            except Exception:
+                ROW_COUNT_BY_TABLE[str(relname)] = 0.0
         row_counts = ", ".join(f"{r[0]}~{r[1]}" for r in rows)
         summaries.append(f"row_counts: {row_counts}")
 
@@ -362,6 +443,79 @@ def _get_schema_cols(conn: psycopg.Connection) -> Dict[str, Set[str]]:
     return SCHEMA_COLS_CACHE
 
 
+def _walk_plan_nodes(plan: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    """Yield all plan nodes in a Postgres JSON plan (best-effort)."""
+    if not isinstance(plan, dict):
+        return
+    yield plan
+    sub = plan.get("Plans")
+    if isinstance(sub, list):
+        for child in sub:
+            if isinstance(child, dict):
+                yield from _walk_plan_nodes(child)
+
+
+def _plan_shape_score_from_plan_root(plan_root: Dict[str, Any]) -> Tuple[int, int, float]:
+    """
+    Return (indexish_count, big_seq_scan_count, shape_score).
+    """
+    indexish = 0
+    big_seq = 0
+    for node in _walk_plan_nodes(plan_root):
+        node_type = str(node.get("Node Type", ""))
+        rel = node.get("Relation Name")
+        if node_type in {"Index Scan", "Index Only Scan", "Bitmap Index Scan", "Bitmap Heap Scan"}:
+            indexish += 1
+        elif node_type == "Seq Scan":
+            if isinstance(rel, str):
+                est_rows = float(ROW_COUNT_BY_TABLE.get(rel, 0.0) or 0.0)
+                if est_rows >= LARGE_TABLE_ROW_THRESHOLD:
+                    big_seq += 1
+    score = math.log1p(indexish) - math.log1p(big_seq)
+    return indexish, big_seq, score
+
+
+def _explain_costs_and_shape(
+    cur: psycopg.Cursor, queries: List[Tuple[str, str]]
+) -> Tuple[float, Dict[str, float], Dict[str, float], Dict[str, int], Dict[str, int]]:
+    """
+    Return:
+      - total_cost
+      - per_query_costs
+      - per_query_shape_score
+      - per_query_indexish_count
+      - per_query_big_seq_scan_count
+    """
+    total_cost = 0.0
+    costs: Dict[str, float] = {}
+    shape_scores: Dict[str, float] = {}
+    indexish_counts: Dict[str, int] = {}
+    big_seq_counts: Dict[str, int] = {}
+
+    for name, sql in queries:
+        try:
+            cur.execute("EXPLAIN (FORMAT JSON) " + sql)
+            raw = cur.fetchone()[0][0]
+            plan_root = raw.get("Plan", {}) if isinstance(raw, dict) else {}
+            c = float(plan_root.get("Total Cost", 1e9))
+            costs[name] = c
+            total_cost += c
+            idx_cnt, big_seq_cnt, shape = _plan_shape_score_from_plan_root(plan_root)
+            shape_scores[name] = float(shape)
+            indexish_counts[name] = int(idx_cnt)
+            big_seq_counts[name] = int(big_seq_cnt)
+        except Exception as e:
+            print(f"Query {name} failed: {e}")
+            penalty = 1e9
+            costs[name] = penalty
+            total_cost += penalty
+            shape_scores[name] = -10.0
+            indexish_counts[name] = 0
+            big_seq_counts[name] = 0
+
+    return total_cost, costs, shape_scores, indexish_counts, big_seq_counts
+
+
 def _get_or_compute_baseline(
     cur: psycopg.Cursor, queries: List[Tuple[str, str]]
 ) -> Tuple[float, Dict[str, float]]:
@@ -369,8 +523,8 @@ def _get_or_compute_baseline(
     Cache baseline costs once per worker process.
     Baseline is computed with hypopg_reset() applied (no hypothetical indexes).
     """
-    global BASELINE_CACHED, BASELINE_COST_CACHE, BASELINE_DETAILS_CACHE
-    if BASELINE_CACHED and BASELINE_DETAILS_CACHE:
+    global BASELINE_CACHED, BASELINE_COST_CACHE, BASELINE_DETAILS_CACHE, BASELINE_PLAN_SHAPE_CACHE
+    if BASELINE_CACHED and BASELINE_DETAILS_CACHE and BASELINE_PLAN_SHAPE_CACHE:
         return BASELINE_COST_CACHE, BASELINE_DETAILS_CACHE
 
     # Ensure no hypo indexes are present before computing baseline.
@@ -379,9 +533,10 @@ def _get_or_compute_baseline(
     except Exception:
         pass
 
-    baseline_cost, baseline_details = _explain_details(cur, queries)
+    baseline_cost, baseline_details, baseline_shape, _, _ = _explain_costs_and_shape(cur, queries)
     BASELINE_COST_CACHE = baseline_cost
     BASELINE_DETAILS_CACHE = baseline_details
+    BASELINE_PLAN_SHAPE_CACHE = baseline_shape
     BASELINE_CACHED = True
     return baseline_cost, baseline_details
 
@@ -721,6 +876,7 @@ def evaluate(program_path: str) -> Dict[str, float]:
 
                 # Baseline (cached per process)
                 baseline_cost, baseline_details = _get_or_compute_baseline(cur, QUERIES)
+                baseline_shape = BASELINE_PLAN_SHAPE_CACHE
 
                 # Apply Indexes
                 try:
@@ -730,7 +886,7 @@ def evaluate(program_path: str) -> Dict[str, float]:
                     pass
 
                 # Plan with indexes
-                plan_cost, plan_details = _explain_details(cur, QUERIES)
+                plan_cost, plan_details, plan_shape, indexish_counts, big_seq_counts = _explain_costs_and_shape(cur, QUERIES)
                 
                 storage_bytes = _hypo_storage_bytes(cur) if ddls else 0
                 storage_mb = storage_bytes / (1024 * 1024)
@@ -753,8 +909,9 @@ def evaluate(program_path: str) -> Dict[str, float]:
                         excess = (p / (1.1 * b)) - 1.0
                         regress_excesses.append(max(0.0, excess))
 
-                    # Compact per-query summary line for prompt
-                    query_lines.append(f"{q}: base={b:.1f} cand={p:.1f} x{r:.3f}")
+                    idxc = int(indexish_counts.get(q, 0))
+                    ssc = int(big_seq_counts.get(q, 0))
+                    query_lines.append(f"{q}: base={b:.1f} cand={p:.1f} x{r:.3f} (idx={idxc}, big_seq={ssc})")
 
                 # Geometric mean of ratios
                 if ratios:
@@ -786,7 +943,16 @@ def evaluate(program_path: str) -> Dict[str, float]:
                     if b_cost > 0 and p_cost < (b_cost * 0.5):
                         bonus_multiplier += 0.2 # 20% bonus per critical query solved
                 
-                combined_score = (geom_mean / max(penalty, 1e-12)) * bonus_multiplier
+                # Plan-shape tie-breaker (small): improvement vs baseline.
+                baseline_avg_shape = 0.0
+                plan_avg_shape = 0.0
+                if QUERIES:
+                    baseline_avg_shape = sum(float(baseline_shape.get(q, 0.0)) for q, _ in QUERIES) / len(QUERIES)
+                    plan_avg_shape = sum(float(plan_shape.get(q, 0.0)) for q, _ in QUERIES) / len(QUERIES)
+                delta_shape = plan_avg_shape - baseline_avg_shape
+                plan_shape_multiplier = max(0.9, min(1.1, 1.0 + 0.05 * delta_shape))
+
+                combined_score = (geom_mean / max(penalty, 1e-12)) * bonus_multiplier * plan_shape_multiplier
 
                 cur.execute("SELECT hypopg_reset();")
 
@@ -811,6 +977,8 @@ def evaluate(program_path: str) -> Dict[str, float]:
         "penalty_storage": penalty_storage,
         "penalty_count": penalty_count,
         "geom_mean_speedup": geom_mean,
+        "plan_shape_multiplier": plan_shape_multiplier,
+        "plan_shape_delta": delta_shape,
         "stats_summary": STATS_SUMMARY,
         "schema_summary": SCHEMA_SUMMARY,
         "workload_digest": WORKLOAD_DIGEST,
